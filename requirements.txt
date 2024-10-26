@@ -11,3 +11,4 @@ python-dotenv
 python-decouple
 psycopg2
 Pillow
+drf-yasg

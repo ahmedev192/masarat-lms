@@ -1,6 +1,7 @@
 import uuid
 from django.db import models
 from django.utils import timezone
+from django.core.exceptions import ValidationError
 
 # Define enums as choices
 class AcademicYear(models.TextChoices):
@@ -89,29 +90,38 @@ class BaseContent(models.Model):
         max_length=15, choices=LearningType.choices, null=False, blank=False
     )
     content_type = models.CharField(
-        max_length=10, choices=ContentType.choices, null=False, blank=False
+        max_length=10, choices=ContentType.choices, unique=False, null=False, blank=False
     )
     description = models.TextField()
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
 
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"Content {self.id} for Lesson {self.lesson}"
 
-
 class VideoContent(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    base_content = models.ForeignKey(BaseContent, on_delete=models.CASCADE)
+    base_content = models.OneToOneField(
+        BaseContent,
+        on_delete=models.CASCADE,
+        related_name='video_content'  # Define related name
+    )
     url = models.TextField()
 
     def __str__(self):
         return f"VideoContent {self.id}"
 
-
 class DynamicContent(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    base_content = models.ForeignKey(BaseContent, on_delete=models.CASCADE)
-    dynamic_data = models.JSONField()
+    base_content = models.OneToOneField(
+        BaseContent,
+        on_delete=models.CASCADE,
+        related_name='dynamic_content'  # Define related name
+    )
+    url = models.TextField()
 
     def __str__(self):
         return f"DynamicContent {self.id}"

@@ -5,13 +5,17 @@ from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
 from .models import (
     Subject, Lesson, Topic, BaseContent, 
-    VideoContent, DynamicContent, RevisionContent
+    VideoContent, DynamicContent, RevisionContent,ContentType
 )
 from .serializers import (
     SubjectSerializer, LessonSerializer, TopicSerializer, 
-    BaseContentSerializer, VideoContentSerializer, 
+    ContentSerializer, VideoContentSerializer, 
     DynamicContentSerializer, RevisionContentSerializer
 )
+from django.db.models import Prefetch
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework import serializers
 
 # Base mixin for student authorization
 class StudentAuthorizationMixin:
@@ -68,65 +72,84 @@ class TopicCreateView(StudentAuthorizationMixin, generics.CreateAPIView):
 
 # Lesson Content by Lesson
 class LessonContentView(StudentAuthorizationMixin, generics.ListAPIView):
-    serializer_class = BaseContentSerializer
+    serializer_class = ContentSerializer
 
     def get_queryset(self):
         lesson_id = self.kwargs['lesson_id']
-        return BaseContent.objects.filter(lesson_id=lesson_id)
+        
+        # Get base contents and prefetch related video or dynamic content based on type
+        base_contents = BaseContent.objects.filter(lesson_id=lesson_id).prefetch_related(
+            Prefetch(
+                'video_content',  # Use the related_name defined in VideoContent
+                queryset=VideoContent.objects.all(),
+                to_attr='video_contents'  # This will be a single object due to OneToOneField
+            ),
+            Prefetch(
+                'dynamic_content',  # Use the related_name defined in DynamicContent
+                queryset=DynamicContent.objects.all(),
+                to_attr='dynamic_contents'  # This will be a single object due to OneToOneField
+            )
+        )
+        return base_contents
 
-# BaseContent Creation
-class BaseContentCreateView(StudentAuthorizationMixin, generics.CreateAPIView):
-    serializer_class = BaseContentSerializer
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        response_data = []
+
+        for base_content in queryset:
+            content_data = ContentSerializer(base_content).data
+            # Append related content based on content type
+            if base_content.content_type == ContentType.VIDEO:
+                content_data['video_contents'] = VideoContentSerializer(
+                    base_content.video_content  # Accessing single object now
+                ).data if base_content.video_content else None
+            elif base_content.content_type == ContentType.DYNAMIC:
+                content_data['dynamic_contents'] = DynamicContentSerializer(
+                    base_content.dynamic_content  # Accessing single object now
+                ).data if base_content.dynamic_content else None
+            response_data.append(content_data)
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+# BaseContent Creation with Video/Dynamic Content Handling
+class ContentCreateView(StudentAuthorizationMixin, generics.CreateAPIView):
+    serializer_class = ContentSerializer
 
     def perform_create(self, serializer):
-        serializer.save()
+        # Save the base content
+        base_content = serializer.save()
 
+        # Check content_type and handle content specifics
+        content_type = self.request.data.get("content_type")
 
+        if content_type == ContentType.VIDEO:
+            file = self.request.FILES.get("file")
+            if file:
+                fs = FileSystemStorage(location=os.path.join(settings.MEDIA_ROOT, "videos"))
+                filename = fs.save(file.name, file)
+                file_url = fs.url(os.path.join("videos", filename))
 
-# Video Content by Lesson
-class VideoContentView(StudentAuthorizationMixin, generics.ListAPIView):
-    serializer_class = VideoContentSerializer
+                # Create associated VideoContent
+                VideoContent.objects.create(base_content=base_content, url=file_url)
+            else:
+                raise serializers.ValidationError({"file": "Video file is required for VIDEO content type"})
 
-    def get_queryset(self):
-        lesson_id = self.kwargs['lesson_id']
-        base_contents = BaseContent.objects.filter(lesson_id=lesson_id, content_type='VIDEO')
-        return VideoContent.objects.filter(base_content__in=base_contents)
+        elif content_type == ContentType.DYNAMIC:
+            file = self.request.FILES.get("file")
+            if file:
+                fs = FileSystemStorage(location=os.path.join(settings.MEDIA_ROOT, "web_pages"))
+                filename = fs.save(file.name, file)
+                file_url = fs.url(os.path.join("web_pages", filename))
 
-# VideoContent Creation (with File URL Handling)
-class VideoContentCreateView(StudentAuthorizationMixin, generics.CreateAPIView):
-    serializer_class = VideoContentSerializer
+                # Create associated DynamicContent
+                DynamicContent.objects.create(base_content=base_content, url=file_url)
+            else:
+                raise serializers.ValidationError({"file": "File is required for DYNAMIC content type"})
 
-    def perform_create(self, serializer):
-        file = self.request.FILES.get('file')
-        if file:
-            # Store the file on the server
-            fs = FileSystemStorage(location=os.path.join(settings.MEDIA_ROOT, 'videos'))
-            filename = fs.save(file.name, file)
-            file_url = fs.url(os.path.join('videos', filename))
-            # Save the URL in the database
-            serializer.save(url=file_url)
         else:
-            serializer.save()
+            raise serializers.ValidationError({"content_type": "Invalid content type provided."})
 
 
-
-
-
-# Dynamic Content by Lesson
-class DynamicContentView(StudentAuthorizationMixin, generics.ListAPIView):
-    serializer_class = DynamicContentSerializer
-
-    def get_queryset(self):
-        lesson_id = self.kwargs['lesson_id']
-        base_contents = BaseContent.objects.filter(lesson_id=lesson_id, content_type='DYNAMIC')
-        return DynamicContent.objects.filter(base_content__in=base_contents)
-
-# DynamicContent Creation
-class DynamicContentCreateView(StudentAuthorizationMixin, generics.CreateAPIView):
-    serializer_class = DynamicContentSerializer
-
-    def perform_create(self, serializer):
-        serializer.save()
 
 # Revision Content by Topic
 class RevisionContentView(StudentAuthorizationMixin, generics.ListAPIView):

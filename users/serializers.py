@@ -1,7 +1,8 @@
 from django.contrib.auth.models import User
 from rest_framework import serializers
-from .models import StudentProfile
+from .models import StudentProfile, Parent
 
+# Student Profile Serializer
 class StudentProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = StudentProfile
@@ -13,12 +14,22 @@ class StudentProfileSerializer(serializers.ModelSerializer):
             "phone_number",
             "gender",
             "date_of_birth",
-            "profile_picture",  # Ensure that profile_picture is included
+            "profile_picture",
             "major",
         ]
+        extra_kwargs = {
+            "academic_year": {"required": True},
+            "learning_type": {"required": True},
+            "first_time_login": {"default": True},
+            "phone_number": {"required": False, "allow_null": True},
+            "gender": {"required": False, "allow_null": True},
+            "date_of_birth": {"required": False, "allow_null": True},
+            "profile_picture": {"required": False, "allow_null": True},
+            "major": {"required": False, "allow_null": True},
+        }
         
     def update(self, instance, validated_data):
-        # Allow updating the profile picture
+        # Update attributes or keep existing values if not provided
         instance.academic_year = validated_data.get("academic_year", instance.academic_year)
         instance.parent = validated_data.get("parent", instance.parent)
         instance.learning_type = validated_data.get("learning_type", instance.learning_type)
@@ -26,38 +37,29 @@ class StudentProfileSerializer(serializers.ModelSerializer):
         instance.phone_number = validated_data.get("phone_number", instance.phone_number)
         instance.gender = validated_data.get("gender", instance.gender)
         instance.date_of_birth = validated_data.get("date_of_birth", instance.date_of_birth)
-
-        # Check if a new profile picture is provided
         profile_picture = validated_data.get("profile_picture", None)
         if profile_picture:
-            instance.profile_picture = profile_picture  # Update the profile picture
-
+            instance.profile_picture = profile_picture
         instance.major = validated_data.get("major", instance.major)
         instance.save()
         return instance
 
+# User Serializer
 class UserSerializer(serializers.ModelSerializer):
     student_profile = StudentProfileSerializer()
 
     class Meta:
         model = User
-        fields = ["id", "username", "password", "email", "student_profile"]
+        fields = ["id", "username", "password", "email", "first_name", "last_name", "student_profile"]
         extra_kwargs = {"password": {"write_only": True}}
 
     def create(self, validated_data):
-        # Extract the nested student profile data
         student_profile_data = validated_data.pop("student_profile")
-        
-        # Create the user
         user = User.objects.create_user(**validated_data)
-        
-        # Create the associated student profile
         StudentProfile.objects.create(user=user, **student_profile_data)
-        
         return user
 
     def update(self, instance, validated_data):
-        # Update the user instance
         student_profile_data = validated_data.pop("student_profile", None)
         instance.username = validated_data.get("username", instance.username)
         instance.email = validated_data.get("email", instance.email)
@@ -65,7 +67,6 @@ class UserSerializer(serializers.ModelSerializer):
             instance.set_password(validated_data["password"])
         instance.save()
 
-        # Update the student profile instance
         if student_profile_data:
             student_profile = instance.student_profile
             for attr, value in student_profile_data.items():
@@ -73,26 +74,55 @@ class UserSerializer(serializers.ModelSerializer):
             student_profile.save()
         
         return instance
+    
 
+
+# Parent Serializer
+class ParentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Parent
+        fields = ["email", "phone_number", "password"]
+        extra_kwargs = {
+            "password": {"write_only": True}  # You may want to hash this if needed
+        }
+        
+    def create(self, validated_data):
+        # This method will ensure the parent instance is created securely
+        return Parent.objects.create(**validated_data)
+
+
+
+
+# Register Serializer
 class RegisterSerializer(serializers.ModelSerializer):
     student_profile = StudentProfileSerializer()
+    parent = ParentSerializer()  # Add parent field
 
     class Meta:
         model = User
-        fields = ["username", "password", "email", "student_profile"]
+        fields = ["username", "password", "email", "first_name", "last_name", "student_profile", "parent"]
         extra_kwargs = {"password": {"write_only": True}}
 
     def create(self, validated_data):
-        # Extract the nested student profile data
+        # Extract parent and student profile data
+        parent_data = validated_data.pop("parent")
         student_profile_data = validated_data.pop("student_profile")
-        
-        # Create the user
-        user = User.objects.create_user(**validated_data)
-        
-        # Create the associated student profile
-        StudentProfile.objects.create(user=user, **student_profile_data)
-        
+
+        # Create user
+        user = User.objects.create_user(
+            **validated_data  # This includes username, password, first_name, last_name, and email
+        )
+
+        # Create parent using ParentSerializer
+        parent_serializer = ParentSerializer(data=parent_data)
+        parent_serializer.is_valid(raise_exception=True)
+        parent = parent_serializer.save()
+
+        # Create student profile and link to the parent
+        StudentProfile.objects.create(user=user, parent=parent, **student_profile_data)
+
         return user
+
 
 class ForgotPasswordSerializer(serializers.Serializer):
     email = serializers.EmailField()
@@ -129,3 +159,6 @@ class ChangePasswordSerializer(serializers.Serializer):
         if data['old_password'] == data['new_password']:
             raise serializers.ValidationError("New password cannot be the same as the old password.")
         return data
+    
+
+
